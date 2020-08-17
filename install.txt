@@ -1,0 +1,1 @@
+pyinstaller --noconfirm --onefile --windowed --icon "visa_scan.ico" --name "VISA scan" --add-data "gui.py;." --add-data "scanner.py;." --hidden-import "pyvisa-py" --add-binary "visa_scan.ico;." --add-data "visa_scan.ico;."  "main.py"
