@@ -1,24 +1,29 @@
 import tkinter as tk
 import tkinter.ttk as ttk
-import pandas as pd
-import pandastable  as pdt
 import threading
 import queue
+import time
+
+from message import Message
 
 
 class Results(tk.Frame):
 
 
-    def __init__(self, parent, gui_events, *args, **kwargs):
+    def __init__(self, parent, outbox, *args, **kwargs):
 
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.parent = parent
-        self.gui_events = gui_events
+        
+        self.inbox_q = queue.Queue()
+        self.outbox_q = outbox
 
-        self.make_table()
+        self.make()
+
+        threading.Thread(target=self.worker, daemon=True).start()
 
 
-    def make_table(self):
+    def make(self):
 
         self.columns = (
             # ID, name, width
@@ -31,6 +36,8 @@ class Results(tk.Frame):
         )
 
         self.results = ttk.Treeview(self.parent)
+        self.results.grid(row=0, column=0, sticky="nswe")
+
         id_names = [x[0] for x in self.columns][1:]
         self.results["columns"] = id_names
 
@@ -38,15 +45,6 @@ class Results(tk.Frame):
             self.results.column(id, width=width, minwidth=width)
             self.results.heading(id, text=name, anchor=tk.W)
         self.results.grid()
-
-
-    def invoke(self, command, *args):
-
-        bindings = {
-            "clear":self.clear,
-            "write":self.write,
-        }
-        bindings[command](*args)
 
 
     def clear(self, *args):
@@ -64,3 +62,26 @@ class Results(tk.Frame):
             for id in id_names:
                 values.append(device.get(id, ""))
             self.results.insert("", "end", text=device.get("ip"), values=values)
+
+
+    def put(self, message):
+
+        self.inbox_q.put(message)
+
+
+    def worker(self):
+
+        commands = {
+            "clear":self.clear,
+            "write":self.write,
+        }
+
+        while True:
+            try:
+                msg = self.inbox_q.get()
+            except queue.Empty:
+                continue
+            else:
+                commands[msg.cmd](*msg.args)
+            finally:
+                time.sleep(10 / 1000)

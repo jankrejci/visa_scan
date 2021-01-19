@@ -3,10 +3,10 @@ import threading
 import time
 import queue
 
-from Scanner import Scanner
-from Controls import Controls
-from Results import Results
-
+from scanner import Scanner
+from controls import Controls
+from results import Results
+from message import Message
 
 class MainApp(tk.Frame):
 
@@ -15,40 +15,46 @@ class MainApp(tk.Frame):
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.parent = parent
 
-        self.gui_events = queue.Queue()
+        self.gui_q = queue.Queue()
 
-        self.scanner = Scanner(self.gui_events)
+        self.scanner = Scanner(outbox=self.gui_q)
 
         self.make_results()
         self.make_controls()
 
-        threading.Thread(target=self.gui_worker, daemon=True).start()
+        threading.Thread(target=self.worker, daemon=True).start()
 
 
     def make_results(self):
 
         self.results_frame = tk.Frame(self.parent, width=120)
         self.results_frame.grid(row=0, column=0, sticky="nswe", padx=1)
-        self.results = Results(self.results_frame, self.gui_events)
+        self.results_frame.columnconfigure(0, weight=1)
+        self.results_frame.rowconfigure(0, weight=1)
+        self.results = Results(self.results_frame, outbox=self.gui_q)
 
 
     def make_controls(self):
 
         self.controls_frame = tk.Frame(self.parent)
         self.controls_frame.grid(row=1, column=0, padx=1)
-        self.controls = Controls(self.controls_frame, self.gui_events)
+        self.controls = Controls(self.controls_frame, outbox=self.gui_q)
 
 
-    def gui_worker(self):
+    def worker(self):
 
-        bindings = {
+        targets = {
             "results":self.results,
             "controls":self.controls,
             "scanner":self.scanner,
         }
 
         while True:
-            if not self.gui_events.empty():
-                target, command, *args = self.gui_events.get()
-                bindings[target].invoke(command, *args)
-            time.sleep(10 / 1000)
+            try:
+                msg = self.gui_q.get()
+            except queue.Empty:
+                continue
+            else:
+                targets[msg.dst].put(msg)
+            finally:
+                time.sleep(10 / 1000)

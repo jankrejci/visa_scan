@@ -1,16 +1,20 @@
 import pandas as pd
-
 import socket
 import threading
 import queue
 import pyvisa
+import time
+
+from message import Message
 
 
 class Scanner():
 
-    def __init__(self, gui_events, port=5025, ip_start=1, ip_end=255, timeout=2):
+    def __init__(self, outbox, port=5025, ip_start=1, ip_end=255, timeout=2):
 
-        self.gui_events = gui_events
+        self.inbox_q = queue.Queue()
+        self.outbox_q = outbox
+
         self.ip_start = ip_start
         self.ip_end = ip_end
         self.port = port
@@ -21,16 +25,10 @@ class Scanner():
         local_ip = local_ip.split('.')
         self.prefix = f"{local_ip[0]}.{local_ip[1]}.{local_ip[2]}."
 
-        self.qVisa = queue.Queue()
-        self.qThreads = queue.Queue()
+        self.visa_q = queue.Queue()
+        self.threads_q = queue.Queue()
 
-
-    def invoke(self, command, *args):
-
-        bindings = {
-            "scan":self.scan_worker,
-        }
-        bindings[command](*args)
+        threading.Thread(target=self.worker, daemon=True).start()
 
 
     def scan_worker(self, *args):
@@ -44,22 +42,24 @@ class Scanner():
             ip = f"{self.prefix}{num}"
             t = threading.Thread(target=self.port_alive, args=(ip,), name=f"port_{ip}", daemon=True)
             t.start()
-            self.qThreads.put(t)
+            self.threads_q.put(t)
 
-        while not self.qThreads.empty():
-            t = self.qThreads.get()
+        while not self.threads_q.empty():
+            t = self.threads_q.get()
             t.join()
 
         results = []
-        while not self.qVisa.empty():
-            visa = self.qVisa.get()
+        while not self.visa_q.empty():
+            visa = self.visa_q.get()
             device = self.parse_idn(visa)
             results.append(device)
 
-        event = ("results", "write", results)
-        self.gui_events.put(event)
-        event = ("controls", "scan_done")
-        self.gui_events.put(event)
+        messages = (
+            Message(src="scanner", dst="results", cmd="write", args=(results,)),
+            Message(src="scanner", dst="controls", cmd="scan_done"),
+        )
+        for message in messages:
+            self.outbox_q.put(message)
 
 
     def port_alive(self, ip):
@@ -78,7 +78,7 @@ class Scanner():
         else:
             t = threading.Thread(target=self.visa_alive, args=(ip,), name=f"visa_{ip}", daemon=True)
             t.start()
-            self.qThreads.put(t)
+            self.threads_q.put(t)
         finally:
             sock.close()
 
@@ -103,7 +103,7 @@ class Scanner():
             return
 
         result = (ip, idn,)
-        self.qVisa.put(result)
+        self.visa_q.put(result)
 
 
     def parse_idn(self, visa):
@@ -111,7 +111,7 @@ class Scanner():
             device = {}
             device["ip"] = visa[0]
 
-            idn = visa[1].split(',')            
+            idn = visa[1].split(',')
             for index, element in enumerate(idn):
                 if index == 0:
                     device["man"] = element
@@ -131,3 +131,25 @@ class Scanner():
                 device["sw"] = element
 
             return device
+
+
+    def put(self, message):
+
+        self.inbox_q.put(message)
+
+
+    def worker(self):
+
+        commands = {
+            "scan":self.scan_worker,
+        }
+
+        while True:
+            try:
+                msg = self.inbox_q.get()
+            except queue.Empty:
+                continue
+            else:
+                commands[msg.cmd](*msg.args)
+            finally:
+                time.sleep(10 / 1000)
